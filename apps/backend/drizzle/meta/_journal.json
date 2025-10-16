@@ -15,6 +15,20 @@
       "when": 1760623320358,
       "tag": "0001_tearful_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1760624430217,
+      "tag": "0002_tidy_pretty_boy",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1760624503804,
+      "tag": "0003_mature_rocket_racer",
+      "breakpoints": true
     }
   ]
 }

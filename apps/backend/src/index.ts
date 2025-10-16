@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { db } from "./db";
-import { rooms, roomParticipants } from "./db/schema";
+import { rooms, roomParticipants, titles, pages } from "./db/schema";
 import { eq, and } from "drizzle-orm";
 
 // WebSocketの接続を管理
@@ -35,6 +35,51 @@ async function broadcastParticipants(roomId: string) {
   });
 }
 
+// ルームの状態をブロードキャスト
+async function broadcastRoomState(roomId: string) {
+  const room = await db.query.rooms.findFirst({
+    where: eq(rooms.id, roomId),
+  });
+
+  const participants = await db.query.roomParticipants.findMany({
+    where: eq(roomParticipants.roomId, roomId),
+    orderBy: (participants, { asc }) => [asc(participants.joinedAt)],
+  });
+
+  const roomTitles = await db.query.titles.findMany({
+    where: eq(titles.roomId, roomId),
+    with: {
+      participant: true,
+    },
+  });
+
+  const roomConnections = connections.get(roomId) || [];
+  const message = JSON.stringify({
+    type: "room_state_update",
+    room,
+    participants,
+    titles: roomTitles,
+  });
+
+  roomConnections.forEach((conn) => {
+    try {
+      conn.ws.send(message);
+    } catch (err) {
+      console.error("Failed to send message:", err);
+    }
+  });
+}
+
+// タイトルをランダムに割り振る
+function shuffleTitles(participantIds: number[], titleIds: number[]) {
+  const shuffled = [...titleIds];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
 const app = new Elysia()
   .use(cors())
   .get("/", () => "Hello Elysia")
@@ -49,7 +94,11 @@ const app = new Elysia()
         charactersPerPage: body.charactersPerPage,
         timeLimit: body.timeLimit,
         timeLimitSeconds: body.timeLimitSeconds ?? null,
+        status: "waiting" as const,
+        currentRound: 0,
         createdAt: new Date(),
+        startedAt: null,
+        completedAt: null,
       };
 
       await db.insert(rooms).values(newRoom);
@@ -167,6 +216,321 @@ const app = new Elysia()
       }),
       body: t.Object({
         playerName: t.String({ minLength: 1, maxLength: 20 }),
+      }),
+    }
+  )
+  .post(
+    "/rooms/:id/start",
+    async ({ params }) => {
+      const room = await db.query.rooms.findFirst({
+        where: eq(rooms.id, params.id),
+      });
+
+      if (!room) {
+        return {
+          success: false,
+          error: "Room not found",
+        };
+      }
+
+      if (room.status !== "waiting") {
+        return {
+          success: false,
+          error: "Game already started",
+        };
+      }
+
+      // ステータスを更新
+      await db
+        .update(rooms)
+        .set({
+          status: "title_input",
+          startedAt: new Date(),
+        })
+        .where(eq(rooms.id, params.id));
+
+      // WebSocketで通知
+      await broadcastRoomState(params.id);
+
+      return {
+        success: true,
+      };
+    },
+    {
+      params: t.Object({
+        id: t.String(),
+      }),
+    }
+  )
+  .post(
+    "/rooms/:id/titles",
+    async ({ params, body }) => {
+      const room = await db.query.rooms.findFirst({
+        where: eq(rooms.id, params.id),
+      });
+
+      if (!room) {
+        return {
+          success: false,
+          error: "Room not found",
+        };
+      }
+
+      if (room.status !== "title_input") {
+        return {
+          success: false,
+          error: "Not in title input phase",
+        };
+      }
+
+      // 参加者を確認
+      const participant = await db.query.roomParticipants.findFirst({
+        where: and(
+          eq(roomParticipants.roomId, params.id),
+          eq(roomParticipants.id, body.participantId)
+        ),
+      });
+
+      if (!participant) {
+        return {
+          success: false,
+          error: "Participant not found",
+        };
+      }
+
+      // 既にタイトルを提出しているか確認
+      const existingTitle = await db.query.titles.findFirst({
+        where: and(
+          eq(titles.roomId, params.id),
+          eq(titles.participantId, body.participantId)
+        ),
+      });
+
+      if (existingTitle) {
+        return {
+          success: false,
+          error: "Title already submitted",
+        };
+      }
+
+      // タイトルを保存
+      await db.insert(titles).values({
+        roomId: params.id,
+        participantId: body.participantId,
+        title: body.title,
+        createdAt: new Date(),
+      });
+
+      // 全員がタイトルを提出したか確認
+      const allParticipants = await db.query.roomParticipants.findMany({
+        where: eq(roomParticipants.roomId, params.id),
+      });
+
+      const allTitles = await db.query.titles.findMany({
+        where: eq(titles.roomId, params.id),
+      });
+
+      if (allTitles.length === allParticipants.length) {
+        // ゲーム開始（ラウンド1）
+        await db
+          .update(rooms)
+          .set({
+            status: "in_progress",
+            currentRound: 1,
+          })
+          .where(eq(rooms.id, params.id));
+      }
+
+      // WebSocketで通知
+      await broadcastRoomState(params.id);
+
+      return {
+        success: true,
+      };
+    },
+    {
+      params: t.Object({
+        id: t.String(),
+      }),
+      body: t.Object({
+        participantId: t.Number(),
+        title: t.String({ minLength: 1, maxLength: 100 }),
+      }),
+    }
+  )
+  .post(
+    "/rooms/:id/pages",
+    async ({ params, body }) => {
+      const room = await db.query.rooms.findFirst({
+        where: eq(rooms.id, params.id),
+      });
+
+      if (!room) {
+        return {
+          success: false,
+          error: "Room not found",
+        };
+      }
+
+      if (room.status !== "in_progress") {
+        return {
+          success: false,
+          error: "Game not in progress",
+        };
+      }
+
+      // タイトルを確認
+      const title = await db.query.titles.findFirst({
+        where: eq(titles.id, body.titleId),
+      });
+
+      if (!title || title.roomId !== params.id) {
+        return {
+          success: false,
+          error: "Title not found",
+        };
+      }
+
+      // 既にこのラウンドでページを提出しているか確認
+      const existingPage = await db.query.pages.findFirst({
+        where: and(
+          eq(pages.titleId, body.titleId),
+          eq(pages.round, room.currentRound),
+          eq(pages.participantId, body.participantId)
+        ),
+      });
+
+      if (existingPage) {
+        return {
+          success: false,
+          error: "Page already submitted for this round",
+        };
+      }
+
+      // ページを保存
+      await db.insert(pages).values({
+        titleId: body.titleId,
+        round: room.currentRound,
+        participantId: body.participantId,
+        content: body.content,
+        submittedAt: new Date(),
+      });
+
+      // 全員が現在のラウンドでページを提出したか確認
+      const allParticipants = await db.query.roomParticipants.findMany({
+        where: eq(roomParticipants.roomId, params.id),
+      });
+
+      const allTitles = await db.query.titles.findMany({
+        where: eq(titles.roomId, params.id),
+      });
+
+      const currentRoundPages = await db.query.pages.findMany({
+        where: and(
+          eq(pages.round, room.currentRound),
+        ),
+      });
+
+      // タイトルごとに現在のラウンドでページが提出されているか確認
+      const titlesWithPages = new Set(currentRoundPages.map(p => p.titleId));
+      const allTitlesHavePages = allTitles.every(t => titlesWithPages.has(t.id));
+
+      if (allTitlesHavePages) {
+        // 次のラウンドへ、または完了
+        if (room.currentRound >= room.pages) {
+          // ゲーム完了
+          await db
+            .update(rooms)
+            .set({
+              status: "completed",
+              completedAt: new Date(),
+            })
+            .where(eq(rooms.id, params.id));
+        } else {
+          // 次のラウンドへ
+          await db
+            .update(rooms)
+            .set({
+              currentRound: room.currentRound + 1,
+            })
+            .where(eq(rooms.id, params.id));
+        }
+      }
+
+      // WebSocketで通知
+      await broadcastRoomState(params.id);
+
+      return {
+        success: true,
+      };
+    },
+    {
+      params: t.Object({
+        id: t.String(),
+      }),
+      body: t.Object({
+        participantId: t.Number(),
+        titleId: t.Number(),
+        content: t.String({ minLength: 1 }),
+      }),
+    }
+  )
+  .get(
+    "/rooms/:id/game-state",
+    async ({ params }) => {
+      const room = await db.query.rooms.findFirst({
+        where: eq(rooms.id, params.id),
+      });
+
+      if (!room) {
+        return {
+          success: false,
+          error: "Room not found",
+        };
+      }
+
+      const participants = await db.query.roomParticipants.findMany({
+        where: eq(roomParticipants.roomId, params.id),
+        orderBy: (participants, { asc }) => [asc(participants.joinedAt)],
+      });
+
+      const roomTitles = await db.query.titles.findMany({
+        where: eq(titles.roomId, params.id),
+      });
+
+      const roomPages = await db.query.pages.findMany({
+        where: (pages, { inArray }) =>
+          inArray(pages.titleId, roomTitles.map(t => t.id)),
+        orderBy: (pages, { asc }) => [asc(pages.round)],
+      });
+
+      // 各参加者の現在の担当タイトルを計算
+      const assignments: Record<number, number | null> = {};
+      
+      if (room.status === "in_progress" || room.status === "completed") {
+        // タイトルをシャッフルして割り当て
+        const participantIds = participants.map(p => p.id);
+        const titleIds = roomTitles.map(t => t.id);
+        
+        // 現在のラウンドに基づいてローテーション
+        participantIds.forEach((participantId, index) => {
+          const titleIndex = (index + room.currentRound - 1) % titleIds.length;
+          assignments[participantId] = titleIds[titleIndex];
+        });
+      }
+
+      return {
+        success: true,
+        room,
+        participants,
+        titles: roomTitles,
+        pages: roomPages,
+        assignments,
+      };
+    },
+    {
+      params: t.Object({
+        id: t.String(),
       }),
     }
   )
