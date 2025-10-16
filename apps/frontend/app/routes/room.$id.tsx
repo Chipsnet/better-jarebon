@@ -12,7 +12,7 @@ import {
   IconButton,
   Stack,
 } from "@chakra-ui/react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, Link } from "react-router";
 import { LuArrowLeft, LuUser, LuCrown } from "react-icons/lu";
 import { api } from "~/lib/api";
@@ -42,6 +42,7 @@ export default function RoomPage() {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -57,6 +58,49 @@ export default function RoomPage() {
       fetchRoomData();
     }
   }, [id]);
+
+  // WebSocket接続を管理
+  useEffect(() => {
+    if (!id || !currentPlayer) return;
+
+    // WebSocket接続を確立
+    const ws = new WebSocket(
+      `ws://localhost:3000/ws/rooms/${id}?playerName=${encodeURIComponent(currentPlayer.playerName)}`
+    );
+
+    ws.onopen = () => {
+      console.log("WebSocket connected");
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "participants_update") {
+          setParticipants(data.participants);
+        }
+      } catch (err) {
+        console.error("Failed to parse WebSocket message:", err);
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+    };
+
+    ws.onclose = () => {
+      console.log("WebSocket disconnected");
+    };
+
+    wsRef.current = ws;
+
+    // クリーンアップ
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [id, currentPlayer]);
 
   const fetchRoomData = async () => {
     if (!id) return;

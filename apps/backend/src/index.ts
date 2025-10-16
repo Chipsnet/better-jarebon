@@ -4,6 +4,37 @@ import { db } from "./db";
 import { rooms, roomParticipants } from "./db/schema";
 import { eq, and } from "drizzle-orm";
 
+// WebSocketの接続を管理
+type RoomConnection = {
+  ws: any;
+  roomId: string;
+  playerName: string;
+};
+
+const connections = new Map<string, RoomConnection[]>();
+
+// ルームの参加者をブロードキャスト
+async function broadcastParticipants(roomId: string) {
+  const participants = await db.query.roomParticipants.findMany({
+    where: eq(roomParticipants.roomId, roomId),
+    orderBy: (participants, { asc }) => [asc(participants.joinedAt)],
+  });
+
+  const roomConnections = connections.get(roomId) || [];
+  const message = JSON.stringify({
+    type: "participants_update",
+    participants,
+  });
+
+  roomConnections.forEach((conn) => {
+    try {
+      conn.ws.send(message);
+    } catch (err) {
+      console.error("Failed to send message:", err);
+    }
+  });
+}
+
 const app = new Elysia()
   .use(cors())
   .get("/", () => "Hello Elysia")
@@ -121,6 +152,9 @@ const app = new Elysia()
         .values(newParticipant)
         .returning();
 
+      // 新しい参加者をWebSocketで通知
+      await broadcastParticipants(params.id);
+
       return {
         success: true,
         participant,
@@ -136,6 +170,56 @@ const app = new Elysia()
       }),
     }
   )
+  .ws("/ws/rooms/:id", {
+    params: t.Object({
+      id: t.String(),
+    }),
+    query: t.Object({
+      playerName: t.String(),
+    }),
+    open(ws) {
+      const { id } = ws.data.params;
+      const { playerName } = ws.data.query;
+
+      console.log(`WebSocket opened: ${playerName} joined room ${id}`);
+
+      // 接続を保存
+      if (!connections.has(id)) {
+        connections.set(id, []);
+      }
+      connections.get(id)!.push({
+        ws,
+        roomId: id,
+        playerName,
+      });
+
+      // 現在の参加者リストを送信
+      broadcastParticipants(id);
+    },
+    message(ws, message) {
+      // クライアントからのメッセージ処理（将来の拡張用）
+      console.log("Received message:", message);
+    },
+    close(ws) {
+      const { id } = ws.data.params;
+      const { playerName } = ws.data.query;
+
+      console.log(`WebSocket closed: ${playerName} left room ${id}`);
+
+      // 接続を削除
+      const roomConnections = connections.get(id);
+      if (roomConnections) {
+        const filtered = roomConnections.filter(
+          (conn) => conn.ws !== ws
+        );
+        if (filtered.length > 0) {
+          connections.set(id, filtered);
+        } else {
+          connections.delete(id);
+        }
+      }
+    },
+  })
   .listen(3000);
 
 console.log(
