@@ -1,0 +1,9 @@
+{
+  "name": "better-jarebon",
+  "version": "1.0.0",
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "bun --filter './apps/*' dev"
+  }
+}
+
