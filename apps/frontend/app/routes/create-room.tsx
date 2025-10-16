@@ -7,9 +7,13 @@ import {
   HStack,
   VStack,
   Heading,
+  Show,
 } from "@chakra-ui/react";
+import { useState } from "react";
 
 export default function CreateRoomPage() {
+  const [timeLimit, setTimeLimit] = useState<string>("disabled");
+
   return (
     <Container py={8}>
       <VStack gap={8} align="stretch">
@@ -37,7 +41,12 @@ export default function CreateRoomPage() {
           </Field.HelperText>
         </Field.Root>
 
-        <RadioCard.Root defaultValue="disabled">
+        <RadioCard.Root
+          value={timeLimit}
+          onValueChange={(e) => {
+            if (e.value) setTimeLimit(e.value);
+          }}
+        >
           <RadioCard.Label>時間制限</RadioCard.Label>
           <HStack align="stretch" gap={4}>
             <RadioCard.Item value="disabled">
@@ -80,6 +89,19 @@ export default function CreateRoomPage() {
             </RadioCard.Item>
           </HStack>
         </RadioCard.Root>
+
+        <Show when={timeLimit === "display" || timeLimit === "enabled"}>
+          <Field.Root>
+            <Field.Label>制限時間（秒）</Field.Label>
+            <NumberInput.Root size="lg" defaultValue="120" min={10} max={600}>
+              <NumberInput.Control />
+              <NumberInput.Input />
+            </NumberInput.Root>
+            <Field.HelperText>
+              1ページあたりの制限時間を秒単位で設定します
+            </Field.HelperText>
+          </Field.Root>
+        </Show>
 
         <Button size="lg" colorPalette="blue" alignSelf="flex-start">
           部屋を作る
