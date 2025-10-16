@@ -8,8 +8,11 @@ import {
   VStack,
   Heading,
   Show,
+  IconButton,
 } from "@chakra-ui/react";
 import { useState } from "react";
+import { Link } from "react-router";
+import { LuArrowLeft } from "react-icons/lu";
 
 export default function CreateRoomPage() {
   const [timeLimit, setTimeLimit] = useState<string>("disabled");
@@ -17,7 +20,14 @@ export default function CreateRoomPage() {
   return (
     <Container py={8}>
       <VStack gap={8} align="stretch">
-        <Heading size="2xl">部屋作成</Heading>
+        <HStack gap={4}>
+          <IconButton asChild variant="ghost" size="lg">
+            <Link to="/">
+              <LuArrowLeft />
+            </Link>
+          </IconButton>
+          <Heading size="2xl">部屋作成</Heading>
+        </HStack>
 
         <Field.Root>
           <Field.Label>ページ数</Field.Label>
