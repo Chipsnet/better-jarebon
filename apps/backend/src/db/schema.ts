@@ -9,5 +9,15 @@ export const rooms = sqliteTable("rooms", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 });
 
+export const roomParticipants = sqliteTable("room_participants", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  roomId: text("room_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
+  playerName: text("player_name").notNull(),
+  isOwner: integer("is_owner", { mode: "boolean" }).notNull().default(false),
+  joinedAt: integer("joined_at", { mode: "timestamp" }).notNull(),
+});
+
 export type Room = typeof rooms.$inferSelect;
 export type NewRoom = typeof rooms.$inferInsert;
+export type RoomParticipant = typeof roomParticipants.$inferSelect;
+export type NewRoomParticipant = typeof roomParticipants.$inferInsert;
