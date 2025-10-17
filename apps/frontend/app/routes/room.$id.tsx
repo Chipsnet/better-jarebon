@@ -113,8 +113,10 @@ export default function RoomPage() {
     if (!id || !currentPlayer) return;
 
     // WebSocket接続を確立
+    const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+    const wsUrl = API_URL.replace(/^http/, "ws");
     const ws = new WebSocket(
-      `ws://localhost:3000/ws/rooms/${id}?playerName=${encodeURIComponent(currentPlayer.playerName)}`
+      `${wsUrl}/ws/rooms/${id}?playerName=${encodeURIComponent(currentPlayer.playerName)}`
     );
 
     ws.onopen = () => {
